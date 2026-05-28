@@ -5,23 +5,22 @@ let bots = [];
 let keys = { w: false, s: false, a: false, d: false, space: false };
 let currentView = "back"; 
 
-// --- PARAMÈTRES ET CARACTÉRISTIQUES DES VOITURES ---
+// --- SENSATIONS DE CONDUITE CORRIGÉES ET ÉQUILIBRÉES ---
 let carSpecs = {
-    red:    { maxSpeed: 1.6, accel: 0.04, handling: 0.045, weight: 1.2 },
-    blue:   { maxSpeed: 1.8, accel: 0.03, handling: 0.035, weight: 1.0 },
-    yellow: { maxSpeed: 1.4, accel: 0.05, handling: 0.050, weight: 1.5 }
+    red:    { maxSpeed: 0.75, accel: 0.015, handling: 0.035, braking: 0.04 },
+    blue:   { maxSpeed: 0.85, accel: 0.012, handling: 0.028, braking: 0.03 },
+    yellow: { maxSpeed: 0.68, accel: 0.020, handling: 0.040, braking: 0.05 }
 };
 let mySpec = carSpecs.red;
 
-// --- PHYSIQUE, NITRO ET EFFETS ---
 let speed = 0;
-const friction = 0.015;
+const friction = 0.008; // Ralentissement naturel plus prononcé
 let playerRadius = 1.2; 
-let nitroAmount = 100; // Jauge de 0 à 100
+let nitroAmount = 100; 
 let isUsingNitro = false;
-let particleSystems = []; // Pour gérer la poussière et la nitro
+let particleSystems = []; 
 
-// --- CONFIGURATION DU CIRCUIT ET MINI-MAP ---
+// --- REPERES DU CIRCUIT ---
 let trackPoints = [];
 let barriers = [];
 let checkpointAngle = 0;
@@ -29,60 +28,65 @@ let currentLap = 0;
 const totalLaps = 3;
 let raceStarted = false;
 let countdownNumber = 3;
-let minimapCtx; // Contexte 2D pour la mini-map
+let minimapCtx; 
 
 function init3DGame(mapType, countBots, isHost, carColor, roomCode, socket) {
     mySpec = carSpecs[carColor] || carSpecs.red;
 
-    // 1. Initialisation Scène, Moteur et Ciel
+    // 1. Initialisation Scène avec Brouillard pour la profondeur
     scene = new THREE.Scene();
-    scene.background = new THREE.Color(mapType === 'desert' ? 0xdfae74 : 0x1e2224);
-    scene.fog = new THREE.FogExp2(scene.background, 0.005);
+    const bgColor = mapType === 'desert' ? 0xe0b080 : 0x222629;
+    scene.background = new THREE.Color(bgColor);
+    scene.fog = new THREE.FogExp2(bgColor, 0.007);
 
     camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
     renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
     document.getElementById('game-container').appendChild(renderer.domElement);
 
-    // Lumières réalistes
+    // Lumières retravaillées pour le relief du décor
     const dirLight = new THREE.DirectionalLight(0xffffff, 1.4);
-    dirLight.position.set(20, 40, 20);
+    dirLight.position.set(40, 80, 40);
     scene.add(dirLight);
-    scene.add(new THREE.AmbientLight(0x555555));
+    scene.add(new THREE.AmbientLight(0x666666));
 
-    // 2. Génération du Circuit et des Barrières
+    // 2. Génération du décor d'environnement, du circuit et de l'arche de départ
+    createEnvironment(mapType);
     createComplexTrack(mapType);
 
-    // 3. Création du Joueur
+    // 3. Positionnement initial et orientation parfaite du joueur
     playerCar = createDetailedCar(carColor);
     playerCar.position.set(trackPoints[0].x, 0.4, trackPoints[0].z);
     playerCar.lookAt(trackPoints[1].x, 0.4, trackPoints[1].z);
     scene.add(playerCar);
 
-    // 4. Génération des Bots (Uniquement pour l'Hôte)
+    // 4. Génération des Bots avec IA stabilisée (Uniquement pour l'Hôte)
     if (isHost) {
         for (let i = 0; i < countBots; i++) {
             let botCar = createDetailedCar("yellow");
-            botCar.position.set(trackPoints[0].x + (i + 1) * 2.5, 0.4, trackPoints[0].z);
+            // Grille de départ ordonnée derrière le joueur
+            let startNode = trackPoints[0];
+            botCar.position.set(startNode.x + (i + 1) * 2.2, 0.4, startNode.z - 4);
+            botCar.lookAt(trackPoints[1].x, 0.4, trackPoints[1].z);
             scene.add(botCar);
             bots.push({
                 mesh: botCar,
                 targetPointIndex: 1,
-                speed: mySpec.maxSpeed * (0.78 + Math.random() * 0.14),
+                // Vitesse proportionnelle pour rester compétitif mais contrôlable
+                speed: mySpec.maxSpeed * (0.8 + Math.random() * 0.12),
                 radius: 1.2,
-                aggressiveness: 0.06
+                aggressiveness: 0.04
             });
         }
     }
 
-    // 5. Interface HTML (Compte à rebours, Tours, Nitro, Mini-map)
     setupInGameUI();
 
-    // 6. Écouteurs d'entrées
+    // Écouteurs de commandes
     window.addEventListener('keydown', (e) => handleKeys(e, true));
     window.addEventListener('keyup', (e) => handleKeys(e, false));
 
-    // Réseau : Gestion des adversaires en ligne
+    // Synchronisation réseau des adversaires
     socket.on('playerMoved', (data) => {
         if (!otherPlayers[data.id]) {
             otherPlayers[data.id] = createDetailedCar(data.color || "blue");
@@ -94,65 +98,70 @@ function init3DGame(mapType, countBots, isHost, carColor, roomCode, socket) {
 
     startCountdown();
 
-    // 7. Boucle principale d'animation
+    // 5. Boucle principale de rendu
     function animate() {
         requestAnimationFrame(animate);
 
-        // Récupération de la vitesse maximale modifiée par la Nitro
         let currentMaxSpeed = mySpec.maxSpeed;
         isUsingNitro = false;
 
         if (raceStarted) {
-            // Gestion de la Nitro (Barre Espace)
+            // Gestion de la Nitro (+30% de boost max)
             if (keys.space && nitroAmount > 0 && keys.w) {
-                currentMaxSpeed = mySpec.maxSpeed * 1.4; // +40% de vitesse max
-                speed = Math.min(speed + mySpec.accel * 1.5, currentMaxSpeed);
-                nitroAmount -= 0.6; // Consommation
+                currentMaxSpeed = mySpec.maxSpeed * 1.3;
+                speed = Math.min(speed + mySpec.accel * 1.2, currentMaxSpeed);
+                nitroAmount -= 0.8;
                 isUsingNitro = true;
-                createParticles(playerCar.position, 0xff4500, 3); // Flammes de pot d'échappement
+                createParticles(playerCar.position, 0xff5500, 2); 
             } else {
-                // La nitro se recharge doucement quand on ne l'utilise pas
-                nitroAmount = Math.min(100, nitroAmount + 0.1);
+                nitroAmount = Math.min(100, nitroAmount + 0.12);
             }
             document.getElementById('nitro-bar').style.width = `${nitroAmount}%`;
 
-            // --- CONTROLES & PHYSIQUE JOUEUR ---
-            if (keys.w && !isUsingNitro) speed = Math.min(speed + mySpec.accel, currentMaxSpeed);
-            else if (keys.s) speed = Math.max(speed - mySpec.accel, -currentMaxSpeed / 2);
-            else if (!isUsingNitro) {
+            // --- PHYSIQUE ET CONDUITE CORRIGÉE ---
+            if (keys.w && !isUsingNitro) {
+                speed = Math.min(speed + mySpec.accel, currentMaxSpeed);
+            } else if (keys.s) {
+                // Vrai système de freinage lourd/marche arrière
+                if (speed > 0) speed = Math.max(0, speed - mySpec.braking);
+                else speed = Math.max(-currentMaxSpeed / 2, speed - mySpec.accel);
+            } else if (!isUsingNitro) {
+                // Décélération naturelle au point mort
                 if (speed > 0) speed = Math.max(0, speed - friction);
                 if (speed < 0) speed = Math.min(0, speed + friction);
             }
 
-            // Limitation si on lâche la nitro
-            if(!isUsingNitro && speed > mySpec.maxSpeed) speed -= 0.02;
+            if(!isUsingNitro && speed > mySpec.maxSpeed) speed -= 0.01;
 
-            // Maniabilité accrue avec effet de dérapage visuel
-            let turnSpeed = mySpec.handling * (0.4 + (Math.abs(speed) / currentMaxSpeed) * 0.6);
+            // --- TOUCHES GAUCHE/DROITE INVERSÉES ICI (CORRIGÉ) ---
+            // On ajuste la vitesse de rotation selon l'allure pour éviter les têtes-à-queue
+            let turnSpeed = mySpec.handling * (0.3 + (Math.abs(speed) / currentMaxSpeed) * 0.7);
             if (keys.a) {
-                playerCar.rotation.y += turnSpeed;
-                if(speed > 0.8) createParticles(playerCar.position, 0x555555, 1); // Poussière de pneu
+                playerCar.rotation.y += turnSpeed; // Tourne à gauche
+                if(speed > 0.3) createParticles(playerCar.position, 0x666666, 1);
             }
             if (keys.d) {
-                playerCar.rotation.y -= turnSpeed;
-                if(speed > 0.8) createParticles(playerCar.position, 0x555555, 1);
+                playerCar.rotation.y -= turnSpeed; // Tourne à droite
+                if(speed > 0.3) createParticles(playerCar.position, 0x666666, 1);
             }
 
             playerCar.translateZ(speed);
 
-            // --- IA DES BOTS AGRESSIFS ---
+            // --- IA STABILISÉE POUR LES BOTS ---
             bots.forEach(bot => {
                 let target = trackPoints[bot.targetPointIndex];
                 let distToTarget = bot.mesh.position.distanceTo(target);
 
-                if (distToTarget < 8) {
+                // Portée de détection accrue (18) pour empêcher le bot de rater ses virages et tourner en rond
+                if (distToTarget < 18) {
                     bot.targetPointIndex = (bot.targetPointIndex + 1) % trackPoints.length;
                 }
 
                 let targetRotation = Math.atan2(target.x - bot.mesh.position.x, target.z - bot.mesh.position.z);
                 
+                // Agression ciblée et adoucie
                 let distToPlayer = bot.mesh.position.distanceTo(playerCar.position);
-                if (distToPlayer < 12 && speed > 0) {
+                if (distToPlayer < 10 && speed > 0) {
                     targetRotation = Math.atan2(playerCar.position.x - bot.mesh.position.x, playerCar.position.z - bot.mesh.position.z);
                 }
 
@@ -162,44 +171,44 @@ function init3DGame(mapType, countBots, isHost, carColor, roomCode, socket) {
 
                 bot.mesh.translateZ(bot.speed);
 
-                // Collision Joueur / Bot
+                // Collision physique solide entre Joueur et Bot
                 if (distToPlayer < (playerRadius + bot.radius)) {
                     let pushX = playerCar.position.x - bot.mesh.position.x;
                     let pushZ = playerCar.position.z - bot.mesh.position.z;
-                    let vector = new THREE.Vector2(pushX, pushZ).normalize().multiplyScalar(0.25);
+                    let vector = new THREE.Vector2(pushX, pushZ).normalize().multiplyScalar(0.18);
                     
                     playerCar.position.x += vector.x;
                     playerCar.position.z += vector.y;
-                    speed *= -0.3; 
+                    speed = -speed * 0.2; 
                 }
             });
 
-            // --- COLLISION BARRIÈRES ---
+            // --- COLLISIONS AVEC LES GLISSIÈRES DE SECURITÉ ---
             barriers.forEach(barrier => {
                 let distToBarrier = playerCar.position.distanceTo(barrier.position);
-                if (distToBarrier < (playerRadius + 1.0)) {
-                    let pushBack = playerCar.position.clone().sub(barrier.position).normalize().multiplyScalar(0.25);
+                if (distToBarrier < (playerRadius + 0.9)) {
+                    let pushBack = playerCar.position.clone().sub(barrier.position).normalize().multiplyScalar(0.2);
                     playerCar.position.add(pushBack);
-                    speed = -speed * 0.3; 
+                    speed = -speed * 0.25; // Stop net et rebond léger au lieu de traverser ou s'envoler
                 }
             });
 
-            // --- CHECKPOINT / TOURS ---
+            // --- TOURS / CHECKPOINT ---
             let distToStart = playerCar.position.distanceTo(trackPoints[0]);
             let distToHalf = playerCar.position.distanceTo(trackPoints[Math.floor(trackPoints.length / 2)]);
 
-            if (distToHalf < 15) checkpointAngle = 1; 
-            if (distToStart < 12 && checkpointAngle === 1) {
+            if (distToHalf < 20) checkpointAngle = 1; 
+            if (distToStart < 15 && checkpointAngle === 1) {
                 checkpointAngle = 0;
                 currentLap++;
                 document.getElementById('lap-count').innerText = `${currentLap}/${totalLaps}`;
                 if (currentLap >= totalLaps) {
-                    alert("🏁 Course Terminée ! Félicitations !");
+                    alert("🏁 Course Terminée ! Bravo !");
                     raceStarted = false;
                 }
             }
 
-            // Envoi réseau
+            // Envoi réseau des coordonnées
             socket.emit('updatePlayer', {
                 roomCode: roomCode,
                 x: playerCar.position.x,
@@ -209,13 +218,8 @@ function init3DGame(mapType, countBots, isHost, carColor, roomCode, socket) {
             });
         }
 
-        // --- ANIMATION DES PARTICULES (Nitro / Poussière) ---
         updateParticles();
-
-        // --- DYNAMIQUE DES CAMÉRAS & EFFET FOV ---
         updateCameraView(currentMaxSpeed);
-
-        // --- RENDU DE LA MINI-MAP ---
         drawMinimap();
 
         renderer.render(scene, camera);
@@ -223,125 +227,128 @@ function init3DGame(mapType, countBots, isHost, carColor, roomCode, socket) {
     animate();
 }
 
-// --- SYSTÈME DE PARTICULES SIMPLE ---
-function createParticles(position, colorHex, count) {
-    const pGeom = new THREE.BoxGeometry(0.15, 0.15, 0.15);
-    const pMat = new THREE.MeshBasicMaterial({ color: colorHex, transparent: true, opacity: 0.8 });
+// --- CRÉATION DU DÉCOR EXTÉRIEUR (DÉCORT) ---
+function createEnvironment(mapType) {
+    // Un immense sol texturé sous tout le circuit pour ne plus être dans le vide vide
+    const floorGeom = new THREE.PlaneGeometry(1000, 1000);
+    const floorMat = new THREE.MeshStandardMaterial({ 
+        color: mapType === 'desert' ? 0xd29d68 : 0x2b5329, // Sable ou Herbe verte sombre
+        roughness: 0.9
+    });
+    const floor = new THREE.Mesh(floorGeom, floorMat);
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.y = -0.1;
+    scene.add(floor);
+
+    // Ajout de quelques rochers/obstacles décoratifs en dehors de la piste pour habiller l'espace
+    const rockGeom = new THREE.DodecahedronGeometry(3, 1);
+    const rockMat = new THREE.MeshStandardMaterial({ color: mapType === 'desert' ? 0x96694c : 0x555555, roughness: 0.9 });
     
-    for (let i = 0; i < count; i++) {
-        const pMesh = new THREE.Mesh(pGeom, pMat);
-        pMesh.position.set(
-            position.x + (Math.random() - 0.5) * 0.6,
-            position.y + (Math.random() - 0.5) * 0.2,
-            position.z + (Math.random() - 0.5) * 0.6
-        );
-        scene.add(pMesh);
-        particleSystems.push({
-            mesh: pMesh,
-            life: 1.0,
-            vX: (Math.random() - 0.5) * 0.1,
-            vY: Math.random() * 0.05,
-            vZ: (Math.random() - 0.5) * 0.1
-        });
+    for (let i = 0; i < 25; i++) {
+        let rock = new THREE.Mesh(rockGeom, rockMat);
+        let angle = Math.random() * Math.PI * 2;
+        let radius = 100 + Math.random() * 80;
+        rock.position.set(Math.sin(angle) * radius, 1, Math.cos(angle) * radius);
+        rock.scale.set(1 + Math.random()*2, 1 + Math.random()*3, 1 + Math.random()*2);
+        scene.add(rock);
     }
 }
 
-function updateParticles() {
-    for (let i = particleSystems.length - 1; i >= 0; i--) {
-        let p = particleSystems[i];
-        p.mesh.position.x += p.vX;
-        p.mesh.position.y += p.vY;
-        p.mesh.position.z += p.vZ;
-        p.life -= 0.04;
-        p.mesh.material.opacity = p.life;
-
-        if (p.life <= 0) {
-            scene.remove(p.mesh);
-            p.mesh.geometry.dispose();
-            p.mesh.material.dispose();
-            particleSystems.splice(i, 1);
-        }
-    }
-}
-
-// --- CRÉATION DU CIRCUITS ET BARRIÈRES ---
+// --- TRACÉ ET CONSTRUCTION DU CIRCUIT ET DE L'ARCHE DE DÉPART ---
 function createComplexTrack(mapType) {
     const curve = new THREE.CatmullRomCurve3([
-        new THREE.Vector3(0, 0, 70),
-        new THREE.Vector3(55, 0, 50),
-        new THREE.Vector3(80, 0, 0),
-        new THREE.Vector3(55, 0, -55),
-        new THREE.Vector3(0, 0, -40),
-        new THREE.Vector3(-55, 0, -70),
-        new THREE.Vector3(-85, 0, 0),
-        new THREE.Vector3(-45, 0, 55)
+        new THREE.Vector3(0, 0, 80),
+        new THREE.Vector3(65, 0, 55),
+        new THREE.Vector3(95, 0, 0),
+        new THREE.Vector3(65, 0, -65),
+        new THREE.Vector3(0, 0, -50),
+        new THREE.Vector3(-65, 0, -80),
+        new THREE.Vector3(-100, 0, 0),
+        new THREE.Vector3(-55, 0, 65)
     ], true);
 
     trackPoints = curve.getPoints(100);
 
-    const trackGeom = new THREE.TubeGeometry(curve, 100, 7.5, 16, true);
+    const trackGeom = new THREE.TubeGeometry(curve, 100, 8, 16, true);
     const trackMat = new THREE.MeshStandardMaterial({ 
-        color: mapType === 'desert' ? 0x544338 : 0x242424, 
+        color: 0x222222, 
         roughness: 0.85 
     });
     const trackMesh = new THREE.Mesh(trackGeom, trackMat);
     trackMesh.position.y = -0.2; 
     scene.add(trackMesh);
 
-    // Ligne de départ
-    const startLine = new THREE.Mesh(new THREE.BoxGeometry(15, 0.05, 0.6), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+    // LIGNES DE DÉPART/ARRIVÉE EN DAMIER AU SOL
+    const startLine = new THREE.Mesh(new THREE.BoxGeometry(16, 0.05, 1.2), new THREE.MeshBasicMaterial({ color: 0xeeeeee }));
     startLine.position.set(trackPoints[0].x, 0.01, trackPoints[0].z);
+    startLine.lookAt(trackPoints[1].x, 0.01, trackPoints[1].z);
     scene.add(startLine);
 
-    // Placement intelligent des barrières
+    // GROSSE ARCHE 3D DE DÉPART AU-DESSUS DE LA PISTE
+    const archGroup = new THREE.Group();
+    const pillarMat = new THREE.MeshStandardMaterial({ color: 0x333333, metalness: 0.6 });
+    const topMat = new THREE.MeshStandardMaterial({ color: 0xcc2222 });
+
+    const leftPillar = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, 8), pillarMat);
+    leftPillar.position.set(-8.5, 4, 0);
+    const rightPillar = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, 8), pillarMat);
+    rightPillar.position.set(8.5, 4, 0);
+    const topBar = new THREE.Mesh(new THREE.BoxGeometry(18, 1.2, 1.5), topMat);
+    topBar.position.set(0, 8, 0);
+
+    archGroup.add(leftPillar, rightPillar, topBar);
+    archGroup.position.set(trackPoints[0].x, 0, trackPoints[0].z);
+    archGroup.lookAt(trackPoints[1].x, 0, trackPoints[1].z);
+    scene.add(archGroup);
+
+    // Disposer les barrières de collision le long du tracé
     for (let i = 0; i < trackPoints.length; i += 2) {
         let p = trackPoints[i];
         let nextP = trackPoints[(i + 1) % trackPoints.length];
         
         let dir = new THREE.Vector3().subVectors(nextP, p).normalize();
-        let normal = new THREE.Vector3(-dir.z, 0, dir.x).multiplyScalar(8.0);
+        let normal = new THREE.Vector3(-dir.z, 0, dir.x).multiplyScalar(8.5);
 
-        let barrierMat = new THREE.MeshStandardMaterial({ color: i % 4 === 0 ? 0xcc2222 : 0xeeeeee }); 
-        let barrierGeom = new THREE.BoxGeometry(0.4, 1.0, 2.8);
+        let barrierMat = new THREE.MeshStandardMaterial({ color: i % 4 === 0 ? 0xdd2222 : 0xf0f0f0, roughness: 0.5 }); 
+        let barrierGeom = new THREE.BoxGeometry(0.4, 0.9, 2.8);
 
         let bExt = new THREE.Mesh(barrierGeom, barrierMat);
-        bExt.position.set(p.x + normal.x, 0.5, p.z + normal.z);
-        bExt.lookAt(nextP.x + normal.x, 0.5, nextP.z + normal.z);
+        bExt.position.set(p.x + normal.x, 0.45, p.z + normal.z);
+        bExt.lookAt(nextP.x + normal.x, 0.45, nextP.z + normal.z);
         scene.add(bExt);
         barriers.push(bExt);
 
         let bInt = new THREE.Mesh(barrierGeom, barrierMat);
-        bInt.position.set(p.x - normal.x, 0.5, p.z - normal.z);
-        bInt.lookAt(nextP.x - normal.x, 0.5, nextP.z - normal.z);
+        bInt.position.set(p.x - normal.x, 0.45, p.z - normal.z);
+        bInt.lookAt(nextP.x - normal.x, 0.45, nextP.z - normal.z);
         scene.add(bInt);
         barriers.push(bInt);
     }
 }
 
-// --- DESIGN DES VOITURES ---
+// --- CONCEPTION DE MAQUETTE AUTOMOBILE ---
 function createDetailedCar(colorHex) {
     const carGroup = new THREE.Group();
     const c = colorHex === "blue" ? 0x0066ff : (colorHex === "yellow" ? 0xffbb00 : 0xff1100);
 
     const bodyMat = new THREE.MeshStandardMaterial({ color: c, roughness: 0.2, metalness: 0.6 });
-    const body = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.4, 3.6), bodyMat);
+    const body = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.4, 3.4), bodyMat);
     body.position.y = 0.2;
     carGroup.add(body);
 
-    const glassMat = new THREE.MeshStandardMaterial({ color: 0x0f0f0f, roughness: 0.1 });
-    const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.45, 1.4), glassMat);
-    cabin.position.set(0, 0.55, -0.2);
+    const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.45, 1.3), new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.1 }));
+    cabin.position.set(0, 0.55, -0.1);
     carGroup.add(cabin);
 
-    const wing = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.1, 0.5), new THREE.MeshStandardMaterial({ color: 0x111111 }));
-    wing.position.set(0, 0.7, -1.6);
+    const wing = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.1, 0.4), new THREE.MeshStandardMaterial({ color: 0x111111 }));
+    wing.position.set(0, 0.65, -1.5);
     carGroup.add(wing);
 
-    const wheelMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.8 });
+    const wheelMat = new THREE.MeshStandardMaterial({ color: 0x151515, roughness: 0.8 });
     const wheelGeom = new THREE.CylinderGeometry(0.35, 0.35, 0.4, 16);
     wheelGeom.rotateZ(Math.PI / 2);
 
-    const positions = [[-0.9, 0.15, 1.1], [0.9, 0.15, 1.1], [-0.9, 0.15, -1.1], [0.9, 0.15, -1.1]];
+    const positions = [[-0.85, 0.15, 1.0], [0.85, 0.15, 1.0], [-0.85, 0.15, -1.0], [0.85, 0.15, -1.0]];
     positions.forEach(pos => {
         let wheel = new THREE.Mesh(wheelGeom, wheelMat);
         wheel.position.set(pos[0], pos[1], pos[2]);
@@ -351,43 +358,32 @@ function createDetailedCar(colorHex) {
     return carGroup;
 }
 
-// --- INTERFACE DE JEU (AVEC NITRO ET MINI-MAP) ---
 function setupInGameUI() {
     const overlay = document.getElementById('ui-overlay');
     
     if(!document.getElementById('lap-container')) {
-        // Compteur de tours
         const lapDiv = document.createElement('div');
         lapDiv.id = "lap-container";
         lapDiv.innerHTML = `Tour : <span id="lap-count">0/${totalLaps}</span>`;
         lapDiv.style.cssText = "background:rgba(0,0,0,0.8); padding:10px 15px; border-radius:5px; font-size:16px; margin-top:5px; border-left:4px solid #fff; font-weight:bold;";
         overlay.appendChild(lapDiv);
 
-        // Barre de Nitro HTML
         const nitroDiv = document.createElement('div');
         nitroDiv.style.cssText = "background:rgba(0,0,0,0.8); padding:10px; border-radius:5px; font-size:14px; margin-top:5px; border-left:4px solid #ff4500; width: 180px;";
         nitroDiv.innerHTML = `<div style="margin-bottom:3px; font-weight:bold; color:#ff4500;">BOOST (ESPACE)</div>
                               <div style="background:#333; width:100%; height:12px; border-radius:3px; overflow:hidden;">
-                                  <div id="nitro-bar" style="background:linear-gradient(90deg, #ff4500, #ff8c00); width:100%; height:100%; transition: width 0.1s;"></div>
+                                  <div id="nitro-bar" style="background:linear-gradient(90deg, #ff4500, #ff8c00); width:100%; height:100%;"></div>
                               </div>`;
         overlay.appendChild(nitroDiv);
 
-        // Zone Info commandes
-        const cmdInfo = document.createElement('div');
-        cmdInfo.style.cssText = "background:rgba(0,0,0,0.8); padding:8px 12px; border-radius:5px; font-size:12px; margin-top:5px; color:#aaa;";
-        cmdInfo.innerHTML = "Contrôles : <strong>Z,Q,S,D</strong> ou <strong>Flèches</strong>";
-        overlay.appendChild(cmdInfo);
-
-        // Création du Canvas pour la Mini-map (en haut à droite de l'écran)
         const minimapCanvas = document.createElement('canvas');
         minimapCanvas.id = "minimap";
-        minimapCanvas.width = 150;
-        minimapCanvas.height = 150;
-        minimapCanvas.style.cssText = "position:absolute; top:10px; right:10px; background:rgba(0,0,0,0.75); border:2px solid #444; border-radius:10px; z-index:10;";
+        minimapCanvas.width = 140;
+        minimapCanvas.height = 140;
+        minimapCanvas.style.cssText = "position:absolute; top:10px; right:10px; background:rgba(0,0,0,0.8); border:2px solid #555; border-radius:8px; z-index:10;";
         document.body.appendChild(minimapCanvas);
         minimapCtx = minimapCanvas.getContext('2d');
 
-        // Div pour le grand compte à rebours
         const countdownDiv = document.createElement('div');
         countdownDiv.id = "countdown";
         countdownDiv.style.cssText = "position:absolute; top:40%; left:50%; transform:translate(-50%,-50%); font-size:90px; font-weight:bold; color:#ff4500; text-shadow:3px 3px 10px #000; z-index:20;";
@@ -404,7 +400,7 @@ function startCountdown() {
     let interval = setInterval(() => {
         countdownNumber--;
         if (countdownNumber === 0) {
-            cDiv.innerText = "START !";
+            cDiv.innerText = "GO !";
             raceStarted = true;
         } else if (countdownNumber < 0) {
             clearInterval(interval);
@@ -415,20 +411,16 @@ function startCountdown() {
     }, 1000);
 }
 
-// --- DESSIN DE LA MINI-MAP CANVAS ---
 function drawMinimap() {
     if (!minimapCtx) return;
+    minimapCtx.clearRect(0, 0, 140, 140);
     
-    minimapCtx.clearRect(0, 0, 150, 150);
-    
-    // Centrage et échelle automatique
-    const center = 75;
-    const scale = 0.65; // Ajustement pour faire rentrer le circuit à l'écran
+    const center = 70;
+    const scale = 0.52; 
 
-    // 1. Dessiner le tracé du circuit en gris
     minimapCtx.beginPath();
-    minimapCtx.strokeStyle = "#555555";
-    minimapCtx.lineWidth = 6;
+    minimapCtx.strokeStyle = "#444444";
+    minimapCtx.lineWidth = 5;
     trackPoints.forEach((pt, idx) => {
         let x = center + pt.x * scale;
         let z = center + pt.z * scale;
@@ -438,40 +430,35 @@ function drawMinimap() {
     minimapCtx.closePath();
     minimapCtx.stroke();
 
-    // 2. Dessiner les Bots (Points Jaunes)
     bots.forEach(bot => {
         minimapCtx.beginPath();
-        minimapCtx.fillStyle = "#ffcc00";
+        minimapCtx.fillStyle = "#ffbb00";
         minimapCtx.arc(center + bot.mesh.position.x * scale, center + bot.mesh.position.z * scale, 3, 0, Math.PI * 2);
         minimapCtx.fill();
     });
 
-    // 3. Dessiner le Joueur (Point Rouge Principal)
     minimapCtx.beginPath();
     minimapCtx.fillStyle = "#ff1100";
-    minimapCtx.arc(center + playerCar.position.x * scale, center + playerCar.position.z * scale, 4.5, 0, Math.PI * 2);
+    minimapCtx.arc(center + playerCar.position.x * scale, center + playerCar.position.z * scale, 4, 0, Math.PI * 2);
     minimapCtx.fill();
 }
 
-// --- EFFET DE RECUL ET FOV DYNAMIQUE ---
 function updateCameraView(currentMaxSpeed) {
-    // Calcul dynamique du FOV basé sur la vitesse (Effet de distorsion de vitesse)
     let speedRatio = Math.abs(speed) / currentMaxSpeed;
-    let targetFOV = 60 + (speedRatio * 18); // Le FOV passe de 60 à 78 à plein régime
+    let targetFOV = 60 + (speedRatio * 15); 
     if (camera.fov !== targetFOV) {
         camera.fov = THREE.MathUtils.lerp(camera.fov, targetFOV, 0.1);
         camera.updateProjectionMatrix();
     }
 
     if (currentView === "back") {
-        // Vue arrière : Lerp fluide
-        const relativeCameraOffset = new THREE.Vector3(0, 2.5, -7 - (speedRatio * 1.5)); // Recule un peu plus si on va vite
+        const relativeCameraOffset = new THREE.Vector3(0, 2.2, -6.5 - (speedRatio * 1.2)); 
         const cameraOffset = relativeCameraOffset.applyMatrix4(playerCar.matrixWorld);
         camera.position.lerp(cameraOffset, 0.15); 
-        camera.lookAt(playerCar.position.clone().add(new THREE.Vector3(0, 0.8, 2)));
+        camera.lookAt(playerCar.position.clone().add(new THREE.Vector3(0, 0.7, 1.5)));
     } else {
-        // Vue à la première personne : Posée net sur le capot avant
-        const relativeCameraOffset = new THREE.Vector3(0, 0.65, 0.8);
+        // Vue à la première personne ajustée sur le nez de la voiture
+        const relativeCameraOffset = new THREE.Vector3(0, 0.65, 0.9);
         const cameraOffset = relativeCameraOffset.applyMatrix4(playerCar.matrixWorld);
         camera.position.copy(cameraOffset);
         
@@ -480,12 +467,35 @@ function updateCameraView(currentMaxSpeed) {
     }
 }
 
+function createParticles(position, colorHex, count) {
+    const pGeom = new THREE.BoxGeometry(0.15, 0.15, 0.15);
+    const pMat = new THREE.MeshBasicMaterial({ color: colorHex, transparent: true, opacity: 0.7 });
+    for (let i = 0; i < count; i++) {
+        const pMesh = new THREE.Mesh(pGeom, pMat);
+        pMesh.position.set(position.x + (Math.random()-0.5)*0.5, position.y, position.z + (Math.random()-0.5)*0.5);
+        scene.add(pMesh);
+        particleSystems.push({ mesh: pMesh, life: 1.0, vX: (Math.random()-0.5)*0.05, vY: Math.random()*0.03, vZ: (Math.random()-0.5)*0.05 });
+    }
+}
+
+function updateParticles() {
+    for (let i = particleSystems.length - 1; i >= 0; i--) {
+        let p = particleSystems[i];
+        p.mesh.position.x += p.vX; p.mesh.position.y += p.vY; p.mesh.position.z += p.vZ;
+        p.life -= 0.05; p.mesh.material.opacity = p.life;
+        if (p.life <= 0) {
+            scene.remove(p.mesh); p.mesh.geometry.dispose(); p.mesh.material.dispose();
+            particleSystems.splice(i, 1);
+        }
+    }
+}
+
 function handleKeys(e, isPressed) {
     if (e.key.toLowerCase() === 'w' || e.key === 'ArrowUp') keys.w = isPressed;
     if (e.key.toLowerCase() === 's' || e.key === 'ArrowDown') keys.s = isPressed;
     if (e.key.toLowerCase() === 'a' || e.key === 'ArrowLeft') keys.a = isPressed;
     if (e.key.toLowerCase() === 'd' || e.key === 'ArrowRight') keys.d = isPressed;
-    if (e.key === ' ') keys.space = isPressed; // Barre Espace pour la nitro
+    if (e.key === ' ') keys.space = isPressed; 
 
     if (e.key.toLowerCase() === 'c' && isPressed) {
         currentView = (currentView === "back") ? "pilot" : "back";
