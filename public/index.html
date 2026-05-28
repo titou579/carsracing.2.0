@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Turbo Online</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+
+    <div id="menu">
+        <h1>🏎️ 3D Turbo Online</h1>
+        
+        <div class="setup-section">
+            <label>Choisis ta voiture :</label>
+            <select id="car-select">
+                <option value="red">Rouge Sport</option>
+                <option value="blue">Bleue F1</option>
+                <option value="yellow">Jaune Prototype</option>
+            </select>
+
+            <label>Choisis la Map :</label>
+            <select id="map-select">
+                <option value="circuit">Circuit Standard</option>
+                <option value="desert">Piste du Désert</option>
+            </select>
+
+            <label>Nombre de Bots :</label>
+            <select id="bots-select">
+                <option value="1">1 Bot</option>
+                <option value="3">3 Bots</option>
+                <option value="5">5 Bots</option>
+            </select>
+        </div>
+
+        <div class="actions-section">
+            <button id="btn-create">Créer un salon privé</button>
+            <div class="or">OU</div>
+            <input type="text" id="join-code" placeholder="Entrer code salon">
+            <button id="btn-join">Rejoindre</button>
+        </div>
+    </div>
+
+    <div id="game-container" style="display: none;">
+        <div id="ui-overlay">
+            <div id="display-code">Salon : <span id="room-id-text">------</span></div>
+            <div id="camera-info">Appuie sur <strong>C</strong> pour changer de vue (Pilote / Arrière)</div>
+        </div>
+    </div>
+
+    <script src="js/menu.js"></script>
+    <script src="js/game.js"></script>
+</body>
+</html>
