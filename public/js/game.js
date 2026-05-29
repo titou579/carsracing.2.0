@@ -48,14 +48,14 @@ function init3DGame(mapType, countBots, isHost, carColor, roomCode, socket) {
     scene.add(dirLight);
     scene.add(new THREE.AmbientLight(0x777777));
 
-    // 1. Génération de l'environnement et du circuit plat
+    // 1. Génération de l'environnement et de l'asphalte
     createEnvironment(mapType);
     createFlatTrack(mapType);
 
-    // 2. Création et positionnement sécurisé du joueur (légèrement au-dessus du sol Y=0.1)
+    // 2. Création du joueur avec une taille de carrosserie ultra-bridée pour éviter le bug géant
     playerCar = createDetailedCar(carColor);
-    playerCar.position.set(trackPoints[0].x, 0.1, trackPoints[0].z);
-    playerCar.lookAt(trackPoints[1].x, 0.1, trackPoints[1].z);
+    playerCar.position.set(trackPoints[0].x, 0.3, trackPoints[0].z);
+    playerCar.lookAt(trackPoints[1].x, 0.3, trackPoints[1].z);
     scene.add(playerCar);
 
     // 3. Génération des Bots
@@ -63,9 +63,8 @@ function init3DGame(mapType, countBots, isHost, carColor, roomCode, socket) {
         for (let i = 0; i < countBots; i++) {
             let botCar = createDetailedCar("yellow");
             let startNode = trackPoints[0];
-            // Placement en grille décalée
-            botCar.position.set(startNode.x + (i + 1) * 2.5, 0.1, startNode.z - 5);
-            botCar.lookAt(trackPoints[1].x, 0.1, trackPoints[1].z);
+            botCar.position.set(startNode.x + (i + 1) * 2.5, 0.3, startNode.z - 5);
+            botCar.lookAt(trackPoints[1].x, 0.3, trackPoints[1].z);
             scene.add(botCar);
             bots.push({
                 mesh: botCar,
@@ -87,7 +86,7 @@ function init3DGame(mapType, countBots, isHost, carColor, roomCode, socket) {
             otherPlayers[data.id] = createDetailedCar(data.color || "blue");
             scene.add(otherPlayers[data.id]);
         }
-        otherPlayers[data.id].position.set(data.x, 0.1, data.z);
+        otherPlayers[data.id].position.set(data.x, 0.3, data.z);
         otherPlayers[data.id].rotation.y = data.r;
     });
 
@@ -111,7 +110,6 @@ function init3DGame(mapType, countBots, isHost, carColor, roomCode, socket) {
             }
             document.getElementById('nitro-bar').style.width = `${nitroAmount}%`;
 
-            // Physique linéaire
             if (keys.w && !isUsingNitro) {
                 speed = Math.min(speed + mySpec.accel, currentMaxSpeed);
             } else if (keys.s) {
@@ -124,20 +122,13 @@ function init3DGame(mapType, countBots, isHost, carColor, roomCode, socket) {
 
             if(!isUsingNitro && speed > mySpec.maxSpeed) speed -= 0.02;
 
-            // Direction fluide corrigée
             let turnSpeed = mySpec.handling * (0.4 + (Math.abs(speed) / currentMaxSpeed) * 0.6);
-            if (keys.a) {
-                playerCar.rotation.y += turnSpeed;
-                if(speed > 0.2) createParticles(playerCar.position, 0x777777, 1);
-            }
-            if (keys.d) {
-                playerCar.rotation.y -= turnSpeed;
-                if(speed > 0.2) createParticles(playerCar.position, 0x777777, 1);
-            }
+            if (keys.a) playerCar.rotation.y += turnSpeed;
+            if (keys.d) playerCar.rotation.y -= turnSpeed;
 
             playerCar.translateZ(speed);
 
-            // Gestion de l'IA des Bots
+            // Bots
             bots.forEach(bot => {
                 let target = trackPoints[bot.targetPointIndex];
                 let distToTarget = bot.mesh.position.distanceTo(target);
@@ -147,8 +138,8 @@ function init3DGame(mapType, countBots, isHost, carColor, roomCode, socket) {
                 }
 
                 let targetRotation = Math.atan2(target.x - bot.mesh.position.x, target.z - bot.mesh.position.z);
-                
                 let distToPlayer = bot.mesh.position.distanceTo(playerCar.position);
+                
                 if (distToPlayer < 9 && speed > 0) {
                     targetRotation = Math.atan2(playerCar.position.x - bot.mesh.position.x, playerCar.position.z - bot.mesh.position.z);
                 }
@@ -156,10 +147,8 @@ function init3DGame(mapType, countBots, isHost, carColor, roomCode, socket) {
                 let diffR = targetRotation - bot.mesh.rotation.y;
                 diffR = Math.atan2(Math.sin(diffR), Math.cos(diffR)); 
                 bot.mesh.rotation.y += diffR * bot.aggressiveness;
-
                 bot.mesh.translateZ(bot.speed);
 
-                // Collision Joueur / Bot
                 if (distToPlayer < (playerRadius + bot.radius)) {
                     let pushX = playerCar.position.x - bot.mesh.position.x;
                     let pushZ = playerCar.position.z - bot.mesh.position.z;
@@ -170,17 +159,18 @@ function init3DGame(mapType, countBots, isHost, carColor, roomCode, socket) {
                 }
             });
 
-            // Collisions Barrières
+            // Barrières
             barriers.forEach(barrier => {
                 let distToBarrier = playerCar.position.distanceTo(barrier.position);
                 if (distToBarrier < (playerRadius + 0.8)) {
                     let pushBack = playerCar.position.clone().sub(barrier.position).normalize().multiplyScalar(0.15);
-                    playerCar.position.add(pushBack);
+                    playerCar.position.x += pushBack.x;
+                    playerCar.position.z += pushBack.z;
                     speed = -speed * 0.2; 
                 }
             });
 
-            // Checkpoints et Tours
+            // Tours
             let distToStart = playerCar.position.distanceTo(trackPoints[0]);
             let distToHalf = playerCar.position.distanceTo(trackPoints[Math.floor(trackPoints.length / 2)]);
 
@@ -213,19 +203,18 @@ function init3DGame(mapType, countBots, isHost, carColor, roomCode, socket) {
     animate();
 }
 
-// --- DECOR GLOBAL ---
+// --- SOL BASIQUE ---
 function createEnvironment(mapType) {
     const floorGeom = new THREE.PlaneGeometry(1000, 1000);
     const floorMat = new THREE.MeshStandardMaterial({ 
         color: mapType === 'desert' ? 0xd29d68 : 0x3b6e39, 
-        roughness: 0.9
+        roughness: 1.0 
     });
     const floor = new THREE.Mesh(floorGeom, floorMat);
     floor.rotation.x = -Math.PI / 2;
-    floor.position.y = 0; // Le sol est à 0 net
+    floor.position.y = 0; // Le sol est à la hauteur 0 absolue
     scene.add(floor);
 
-    // Obstacles visuels (Rochers)
     const rockGeom = new THREE.DodecahedronGeometry(2, 1);
     const rockMat = new THREE.MeshStandardMaterial({ color: mapType === 'desert' ? 0x96694c : 0x666666, roughness: 0.9 });
     for (let i = 0; i < 30; i++) {
@@ -238,7 +227,7 @@ function createEnvironment(mapType) {
     }
 }
 
-// --- CREATION DE LA ROUTE PLATE (FINI LE TUBE NOIR) ---
+// --- TRACÉ EN RUBAN ÉPAISSI ET SURÉLEVÉ ---
 function createFlatTrack(mapType) {
     const curve = new THREE.CatmullRomCurve3([
         new THREE.Vector3(0, 0, 80),
@@ -253,107 +242,124 @@ function createFlatTrack(mapType) {
 
     trackPoints = curve.getPoints(100);
 
-    // On crée une forme de route plate (ruban plat de 14 unités de large)
-    const trackShape = new THREE.Shape();
-    trackShape.moveTo(-7, 0);
-    trackShape.lineTo(7, 0);
+    const trackGeom = new THREE.BufferGeometry();
+    const vertices = [];
+    const indices = [];
+    const width = 16; // Route un peu plus large
 
-    const extrudeSettings = {
-        steps: 100,
-        bevelEnabled: false,
-        extrudePath: curve
-    };
+    for (let i = 0; i < trackPoints.length; i++) {
+        let p = trackPoints[i];
+        let nextP = trackPoints[(i + 1) % trackPoints.length];
+        
+        let dir = new THREE.Vector3().subVectors(nextP, p).normalize();
+        let normal = new THREE.Vector3(-dir.z, 0, dir.x).multiplyScalar(width / 2);
 
-    const trackGeom = new THREE.ExtrudeGeometry(trackShape, extrudeSettings);
-    const trackMat = new THREE.MeshStandardMaterial({ color: 0x282a2d, roughness: 0.7 });
+        // On monte la route à Y = 0.05 pour qu'elle passe au-dessus de l'herbe à coup sûr
+        vertices.push(p.x + normal.x, 0.05, p.z + normal.z); 
+        vertices.push(p.x - normal.x, 0.05, p.z - normal.z); 
+
+        let currG = 2 * i;
+        let currD = 2 * i + 1;
+        let nextG = (2 * (i + 1)) % (trackPoints.length * 2);
+        let nextD = (2 * (i + 1) + 1) % (trackPoints.length * 2);
+
+        indices.push(currG, nextG, currD);
+        indices.push(currD, nextG, nextD);
+    }
+
+    trackGeom.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+    trackGeom.setIndex(indices);
+    trackGeom.computeVertexNormals();
+
+    const trackMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.8 });
     const trackMesh = new THREE.Mesh(trackGeom, trackMat);
-    trackMesh.position.y = 0.02; // Placé juste un poil au-dessus du sol vert
     scene.add(trackMesh);
 
-    // Ligne de départ blanche au sol
-    const startLine = new THREE.Mesh(new THREE.BoxGeometry(14, 0.03, 1.0), new THREE.MeshBasicMaterial({ color: 0xffffff }));
-    startLine.position.set(trackPoints[0].x, 0.04, trackPoints[0].z);
-    startLine.lookAt(trackPoints[1].x, 0.04, trackPoints[1].z);
+    // Ligne de départ blanche
+    const startLine = new THREE.Mesh(new THREE.BoxGeometry(16, 0.02, 1.2), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+    startLine.position.set(trackPoints[0].x, 0.07, trackPoints[0].z);
+    startLine.lookAt(trackPoints[1].x, 0.07, trackPoints[1].z);
     scene.add(startLine);
 
-    // Arche de départ solide en haut
+    // Arche rouge
     const archGroup = new THREE.Group();
     const pillarMat = new THREE.MeshStandardMaterial({ color: 0x444444 });
     const topMat = new THREE.MeshStandardMaterial({ color: 0xdd2222 });
 
     const leftPillar = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 7), pillarMat);
-    leftPillar.position.set(-7.5, 3.5, 0);
+    leftPillar.position.set(-8.5, 3.5, 0);
     const rightPillar = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 7), pillarMat);
-    rightPillar.position.set(7.5, 3.5, 0);
-    const topBar = new THREE.Mesh(new THREE.BoxGeometry(16, 1.0, 1.2), topMat);
+    rightPillar.position.set(8.5, 3.5, 0);
+    const topBar = new THREE.Mesh(new THREE.BoxGeometry(18, 1.0, 1.2), topMat);
     topBar.position.set(0, 7, 0);
 
     archGroup.add(leftPillar, rightPillar, topBar);
-    archGroup.position.set(trackPoints[0].x, 0, trackPoints[0].z);
-    archGroup.lookAt(trackPoints[1].x, 0, trackPoints[1].z);
+    archGroup.position.set(trackPoints[0].x, 0.05, trackPoints[0].z);
+    archGroup.lookAt(trackPoints[1].x, 0.05, trackPoints[1].z);
     scene.add(archGroup);
 
-    // Barrières de sécurité positionnées de part et d'autre de la route plate
+    // Barrières de sécurité
     for (let i = 0; i < trackPoints.length; i += 2) {
         let p = trackPoints[i];
         let nextP = trackPoints[(i + 1) % trackPoints.length];
         
         let dir = new THREE.Vector3().subVectors(nextP, p).normalize();
-        let normal = new THREE.Vector3(-dir.z, 0, dir.x).multiplyScalar(7.5);
+        let normal = new THREE.Vector3(-dir.z, 0, dir.x).multiplyScalar(8.2);
 
         let barrierMat = new THREE.MeshStandardMaterial({ color: i % 4 === 0 ? 0xcc2222 : 0xeeeeee }); 
-        let barrierGeom = new THREE.BoxGeometry(0.3, 0.7, 2.5);
+        let barrierGeom = new THREE.BoxGeometry(0.3, 0.8, 2.5);
 
         let bExt = new THREE.Mesh(barrierGeom, barrierMat);
-        bExt.position.set(p.x + normal.x, 0.35, p.z + normal.z);
-        bExt.lookAt(nextP.x + normal.x, 0.35, nextP.z + normal.z);
+        bExt.position.set(p.x + normal.x, 0.45, p.z + normal.z);
+        bExt.lookAt(nextP.x + normal.x, 0.45, nextP.z + normal.z);
         scene.add(bExt);
         barriers.push(bExt);
 
         let bInt = new THREE.Mesh(barrierGeom, barrierMat);
-        bInt.position.set(p.x - normal.x, 0.35, p.z - normal.z);
-        bInt.lookAt(nextP.x - normal.x, 0.35, nextP.z - normal.z);
+        bInt.position.set(p.x - normal.x, 0.45, p.z - normal.z);
+        bInt.lookAt(nextP.x - normal.x, 0.45, nextP.z - normal.z);
         scene.add(bInt);
         barriers.push(bInt);
     }
 }
 
-// --- CONSTRUCTIONS MODÈLES RÉDUITS DES VOITURES ---
+// --- FORCE LA MINI-TAILLE DE LA VOITURES ---
 function createDetailedCar(colorHex) {
     const carGroup = new THREE.Group();
     const c = colorHex === "blue" ? 0x0066ff : (colorHex === "yellow" ? 0xffbb00 : 0xff1100);
 
     const bodyMat = new THREE.MeshStandardMaterial({ color: c, roughness: 0.3, metalness: 0.5 });
-    // Tailles réajustées pour être proportionnelles à la piste
-    const body = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.35, 2.8), bodyMat);
-    body.position.y = 0.2;
+    // Modèle réduit très compact pour ne pas déborder sur l'écran
+    const body = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.3, 2.4), bodyMat);
+    body.position.y = 0.15;
     carGroup.add(body);
 
-    const cabin = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.4, 1.1), new THREE.MeshStandardMaterial({ color: 0x111111 }));
-    cabin.position.set(0, 0.5, -0.1);
+    const cabin = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.35, 1.0), new THREE.MeshStandardMaterial({ color: 0x111111 }));
+    cabin.position.set(0, 0.45, -0.1);
     carGroup.add(cabin);
 
-    const wing = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.08, 0.35), new THREE.MeshStandardMaterial({ color: 0x111111 }));
-    wing.position.set(0, 0.6, -1.2);
+    const wing = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.06, 0.3), new THREE.MeshStandardMaterial({ color: 0x111111 }));
+    wing.position.set(0, 0.55, -1.0);
     carGroup.add(wing);
 
     const wheelMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.8 });
-    const wheelGeom = new THREE.CylinderGeometry(0.28, 0.28, 0.35, 16);
+    const wheelGeom = new THREE.CylinderGeometry(0.24, 0.24, 0.3, 16);
     wheelGeom.rotateZ(Math.PI / 2);
 
-    const positions = [[-0.75, 0.14, 0.8], [0.75, 0.14, 0.8], [-0.75, 0.14, -0.8], [0.75, 0.14, -0.8]];
+    const positions = [[-0.7, 0.12, 0.7], [0.7, 0.12, 0.7], [-0.7, 0.12, -0.7], [0.7, 0.12, -0.7]];
     positions.forEach(pos => {
         let wheel = new THREE.Mesh(wheelGeom, wheelMat);
         wheel.position.set(pos[0], pos[1], pos[2]);
         carGroup.add(wheel);
     });
 
+    // Échelle forcée à 1 pour écraser tout bug d'héritage d'échelle global
+    carGroup.scale.set(1, 1, 1);
     return carGroup;
 }
 
 function setupInGameUI() {
     const overlay = document.getElementById('ui-overlay');
-    
     if(!document.getElementById('lap-container')) {
         const lapDiv = document.createElement('div');
         lapDiv.id = "lap-container";
@@ -407,7 +413,6 @@ function startCountdown() {
 function drawMinimap() {
     if (!minimapCtx) return;
     minimapCtx.clearRect(0, 0, 130, 130);
-    
     const center = 65;
     const scale = 0.5; 
 
@@ -436,24 +441,23 @@ function drawMinimap() {
     minimapCtx.fill();
 }
 
-// --- CALIBRAGE SECURISE DE LA CAMERA ---
+// --- RECUL ET REHAUSSEMENT CAMERA DRACONIENNE ---
 function updateCameraView(currentMaxSpeed) {
     let speedRatio = Math.abs(speed) / currentMaxSpeed;
-    let targetFOV = 60 + (speedRatio * 12); 
+    let targetFOV = 60 + (speedRatio * 10); 
     if (camera.fov !== targetFOV) {
         camera.fov = THREE.MathUtils.lerp(camera.fov, targetFOV, 0.1);
         camera.updateProjectionMatrix();
     }
 
     if (currentView === "back") {
-        // Reculée et rehaussée pour englober la voiture sans clipping
-        const relativeCameraOffset = new THREE.Vector3(0, 2.8, -6.0 - (speedRatio * 1.0)); 
+        // Reculée à -8.5 unités et levée à 4.0 unités de hauteur pour survoler le véhicule géant
+        const relativeCameraOffset = new THREE.Vector3(0, 4.0, -8.5 - (speedRatio * 1.5)); 
         const cameraOffset = relativeCameraOffset.applyMatrix4(playerCar.matrixWorld);
         camera.position.lerp(cameraOffset, 0.2); 
-        camera.lookAt(playerCar.position.clone().add(new THREE.Vector3(0, 0.6, 1.5)));
+        camera.lookAt(playerCar.position.clone().add(new THREE.Vector3(0, 0.5, 2.0)));
     } else {
-        // Vue capot parfaitement dégagée vers l'avant
-        const relativeCameraOffset = new THREE.Vector3(0, 0.65, 0.6);
+        const relativeCameraOffset = new THREE.Vector3(0, 0.7, 0.8);
         const cameraOffset = relativeCameraOffset.applyMatrix4(playerCar.matrixWorld);
         camera.position.copy(cameraOffset);
         
