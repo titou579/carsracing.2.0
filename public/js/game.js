@@ -30,20 +30,19 @@ let raceStarted = false;
 let countdownNumber = 3;
 let minimapCtx; 
 
-// --- OPTIMISATION : GÉOMÉTRIES ET MATÉRIAUX UNIQUES POUR ÉVITER LE FREEZE ---
+// --- MISE EN CACHE DES GÉOMÉTRIES ET MATÉRIAUX POUR ÉVITER LES FREEZES ---
 const CAR_GEOMETRIES = {
     body: new THREE.BoxGeometry(1.2, 0.3, 2.4),
     cabin: new THREE.BoxGeometry(0.8, 0.35, 1.0),
     wing: new THREE.BoxGeometry(1.4, 0.06, 0.3),
     wheel: new THREE.CylinderGeometry(0.24, 0.24, 0.3, 16)
 };
-CAR_GEOMETRIES.wheel.rotateZ(Math.PI / 2); // Orienté une bonne fois pour toutes
+CAR_GEOMETRIES.wheel.rotateZ(Math.PI / 2); // Orienté une fois pour toutes
 
 const CAR_MATERIALS = {
     cabin: new THREE.MeshStandardMaterial({ color: 0x111111 }),
     wing: new THREE.MeshStandardMaterial({ color: 0x111111 }),
     wheel: new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.8 }),
-    // Profils de carrosserie pré-calculés
     red: new THREE.MeshStandardMaterial({ color: 0xff1100, roughness: 0.3, metalness: 0.5 }),
     blue: new THREE.MeshStandardMaterial({ color: 0x0066ff, roughness: 0.3, metalness: 0.5 }),
     yellow: new THREE.MeshStandardMaterial({ color: 0xffbb00, roughness: 0.3, metalness: 0.5 })
@@ -100,13 +99,20 @@ function init3DGame(mapType, countBots, isHost, carColor, roomCode, socket) {
     window.addEventListener('keydown', (e) => handleKeys(e, true));
     window.addEventListener('keyup', (e) => handleKeys(e, false));
 
+    // --- LOGIQUE RÉSEAU SÉCURISÉE SANS BLOCAGE ---
     socket.on('playerMoved', (data) => {
+        if (!data || !data.id) return; // Sécurité si paquet corrompu
+
         if (!otherPlayers[data.id]) {
+            console.log("Nouveau joueur détecté, instanciation fluide...");
             otherPlayers[data.id] = createDetailedCar(data.color || "blue");
+            otherPlayers[data.id].position.set(data.x || 0, 0.3, data.z || 0);
             scene.add(otherPlayers[data.id]);
+        } else {
+            // Mise à jour classique des coordonnées reçues
+            otherPlayers[data.id].position.set(data.x, 0.3, data.z);
+            otherPlayers[data.id].rotation.y = data.r;
         }
-        otherPlayers[data.id].position.set(data.x, 0.3, data.z);
-        otherPlayers[data.id].rotation.y = data.r;
     });
 
     startCountdown();
@@ -142,7 +148,7 @@ function init3DGame(mapType, countBots, isHost, carColor, roomCode, socket) {
 
             if(!isUsingNitro && speed > mySpec.maxSpeed) speed -= 0.02;
 
-            // Direction fluide et naturelle
+            // Direction fluide (Gauche / Droite dans le bon sens)
             let turnSpeed = mySpec.handling * (0.4 + (Math.abs(speed) / currentMaxSpeed) * 0.6);
             if (keys.a) {
                 playerCar.rotation.y -= turnSpeed;
@@ -350,11 +356,9 @@ function createFlatTrack(mapType) {
     }
 }
 
-// --- CONSTRUCTIONS DES VOITURES OPTIMISÉES ET INSTANTANÉES ---
+// --- INSTANCIATION DES VOITURES SANS RECALCUL CPU/GPU ---
 function createDetailedCar(colorHex) {
     const carGroup = new THREE.Group();
-    
-    // On pioche directement dans nos modèles déjà prêts
     const bodyMat = CAR_MATERIALS[colorHex] || CAR_MATERIALS.red;
 
     const body = new THREE.Mesh(CAR_GEOMETRIES.body, bodyMat);
