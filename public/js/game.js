@@ -30,6 +30,25 @@ let raceStarted = false;
 let countdownNumber = 3;
 let minimapCtx; 
 
+// --- OPTIMISATION : GÉOMÉTRIES ET MATÉRIAUX UNIQUES POUR ÉVITER LE FREEZE ---
+const CAR_GEOMETRIES = {
+    body: new THREE.BoxGeometry(1.2, 0.3, 2.4),
+    cabin: new THREE.BoxGeometry(0.8, 0.35, 1.0),
+    wing: new THREE.BoxGeometry(1.4, 0.06, 0.3),
+    wheel: new THREE.CylinderGeometry(0.24, 0.24, 0.3, 16)
+};
+CAR_GEOMETRIES.wheel.rotateZ(Math.PI / 2); // Orienté une bonne fois pour toutes
+
+const CAR_MATERIALS = {
+    cabin: new THREE.MeshStandardMaterial({ color: 0x111111 }),
+    wing: new THREE.MeshStandardMaterial({ color: 0x111111 }),
+    wheel: new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.8 }),
+    // Profils de carrosserie pré-calculés
+    red: new THREE.MeshStandardMaterial({ color: 0xff1100, roughness: 0.3, metalness: 0.5 }),
+    blue: new THREE.MeshStandardMaterial({ color: 0x0066ff, roughness: 0.3, metalness: 0.5 }),
+    yellow: new THREE.MeshStandardMaterial({ color: 0xffbb00, roughness: 0.3, metalness: 0.5 })
+};
+
 function init3DGame(mapType, countBots, isHost, carColor, roomCode, socket) {
     mySpec = carSpecs[carColor] || carSpecs.red;
 
@@ -123,7 +142,7 @@ function init3DGame(mapType, countBots, isHost, carColor, roomCode, socket) {
 
             if(!isUsingNitro && speed > mySpec.maxSpeed) speed -= 0.02;
 
-            // Direction fluide (CORRIGÉE : Gauche/Droite remises dans le bon sens)
+            // Direction fluide et naturelle
             let turnSpeed = mySpec.handling * (0.4 + (Math.abs(speed) / currentMaxSpeed) * 0.6);
             if (keys.a) {
                 playerCar.rotation.y -= turnSpeed;
@@ -263,7 +282,6 @@ function createFlatTrack(mapType) {
         let dir = new THREE.Vector3().subVectors(nextP, p).normalize();
         let normal = new THREE.Vector3(-dir.z, 0, dir.x).multiplyScalar(width / 2);
 
-        // Positionnement surélevé à Y=0.05 pour éliminer le Z-fighting avec l'herbe
         vertices.push(p.x + normal.x, 0.05, p.z + normal.z); 
         vertices.push(p.x - normal.x, 0.05, p.z - normal.z); 
 
@@ -307,7 +325,7 @@ function createFlatTrack(mapType) {
     archGroup.lookAt(trackPoints[1].x, 0.05, trackPoints[1].z);
     scene.add(archGroup);
 
-    // Barrières de sécurité sur les bords
+    // Barrières de sécurité
     for (let i = 0; i < trackPoints.length; i += 2) {
         let p = trackPoints[i];
         let nextP = trackPoints[(i + 1) % trackPoints.length];
@@ -332,31 +350,28 @@ function createFlatTrack(mapType) {
     }
 }
 
-// --- CONSTRUCTIONS MODÈLES RÉDUITS DES VOITURES ---
+// --- CONSTRUCTIONS DES VOITURES OPTIMISÉES ET INSTANTANÉES ---
 function createDetailedCar(colorHex) {
     const carGroup = new THREE.Group();
-    const c = colorHex === "blue" ? 0x0066ff : (colorHex === "yellow" ? 0xffbb00 : 0xff1100);
+    
+    // On pioche directement dans nos modèles déjà prêts
+    const bodyMat = CAR_MATERIALS[colorHex] || CAR_MATERIALS.red;
 
-    const bodyMat = new THREE.MeshStandardMaterial({ color: c, roughness: 0.3, metalness: 0.5 });
-    const body = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.3, 2.4), bodyMat);
+    const body = new THREE.Mesh(CAR_GEOMETRIES.body, bodyMat);
     body.position.y = 0.15;
     carGroup.add(body);
 
-    const cabin = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.35, 1.0), new THREE.MeshStandardMaterial({ color: 0x111111 }));
+    const cabin = new THREE.Mesh(CAR_GEOMETRIES.cabin, CAR_MATERIALS.cabin);
     cabin.position.set(0, 0.45, -0.1);
     carGroup.add(cabin);
 
-    const wing = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.06, 0.3), new THREE.MeshStandardMaterial({ color: 0x111111 }));
+    const wing = new THREE.Mesh(CAR_GEOMETRIES.wing, CAR_MATERIALS.wing);
     wing.position.set(0, 0.55, -1.0);
     carGroup.add(wing);
 
-    const wheelMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.8 });
-    const wheelGeom = new THREE.CylinderGeometry(0.24, 0.24, 0.3, 16);
-    wheelGeom.rotateZ(Math.PI / 2);
-
     const positions = [[-0.7, 0.12, 0.7], [0.7, 0.12, 0.7], [-0.7, 0.12, -0.7], [0.7, 0.12, -0.7]];
     positions.forEach(pos => {
-        let wheel = new THREE.Mesh(wheelGeom, wheelMat);
+        let wheel = new THREE.Mesh(CAR_GEOMETRIES.wheel, CAR_MATERIALS.wheel);
         wheel.position.set(pos[0], pos[1], pos[2]);
         carGroup.add(wheel);
     });
